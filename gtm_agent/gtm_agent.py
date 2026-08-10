@@ -58,7 +58,7 @@ def build_prospect_profile(prospect_id: str) -> dict:
         return {"prospect_profile": None, "found": False}
     built = {
         "prospect_id": prospect_id,
-        **rec,
+        **data_service.redact(rec),
         "engagement_history": data_service.fetch_engagement_history(prospect_id),
         "account_details": data_service.fetch_account_details(prospect_id),
         "tech_stack": data_service.fetch_tech_stack(prospect_id),
@@ -122,18 +122,22 @@ def score_prospect(prospect_profile: dict, offering: dict | None = None) -> dict
     return result.model_dump()
 
 
+RETURNABLE_PROSPECT_FIELDS = (
+    "name", "email", "disqualified", "annual_revenue", "enrichment_source",
+)
+
+
 @tool
 def get_prospect(prospect_id: str) -> dict:
     "Look up a prospect's contact details by prospect_id (e.g. 'LEAD-12853'). Returns the prospect's name and email plus a found flag."
     record = data_service.get_prospect_record(prospect_id)
     if record is None:
         return {"prospect": None, "found": False}
-    # Carry the contact fields through, dropping the bulky enrichment blobs the
-    # caller can pull from build_prospect_profile instead.
+    # Allow-list the fields this tool documents, so any new field on the record
+    # (sensitive or bulky) is denied by default rather than returned.
     contact = {
         "prospect_id": prospect_id,
-        **{k: v for k, v in record.items()
-           if k not in ("engagement_history", "account_details", "tech_stack")},
+        **{k: v for k, v in record.items() if k in RETURNABLE_PROSPECT_FIELDS},
     }
     return {"prospect": contact, "found": True}
 

@@ -16,12 +16,24 @@ __all__ = [
     "get_offering", "get_prospect_record", "update_prospect_info",
     "fetch_engagement_history", "fetch_account_details", "fetch_tech_stack",
     "get_profile_from_db", "save_profile_to_db",
-    "get_rep",
+    "get_rep", "redact", "SENSITIVE_FIELDS",
 ]
 
 # Built prospect profiles are cached in memory (keyed by prospect_id) so repeat
 # lookups within a run are served without rebuilding.
 _PROFILES = {}
+
+# Blocks that must never leave the data-access layer: they carry billing
+# identity data that no tool result, profile cache entry, or prompt may contain.
+SENSITIVE_FIELDS = ("billing_qualification",)
+
+
+def redact(record):
+    "Return a copy of record without its sensitive blocks, or None if record is None."
+    if record is None:
+        return None
+    return {k: v for k, v in record.items() if k not in SENSITIVE_FIELDS}
+
 
 # ---------------------------------------------------------------------------
 # Public data-access functions
