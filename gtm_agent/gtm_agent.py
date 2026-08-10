@@ -149,14 +149,20 @@ def get_current_rep(runtime: ToolRuntime) -> dict:
 
 
 @tool
-def send_prospect_email(prospect: dict, subject: str, body: str, runtime: ToolRuntime, from_rep: dict | None = None) -> dict:
-    "Draft and send an email to the given prospect. Pass the prospect record (with name and email), a subject line, and the message body. The sending rep defaults to the signed-in rep."
+def send_prospect_email(prospect: dict, subject: str, body: str, runtime: ToolRuntime, from_rep: dict | None = None, override_disqualified: bool = False) -> dict:
+    "Draft and send an email to the given prospect. Pass the prospect record (with name, email and disqualified fields), a subject line, and the message body. The sending rep defaults to the signed-in rep. Sends to prospects whose record has disqualified true are blocked unless override_disqualified=True is passed after the rep explicitly confirms the override."
     if from_rep is None:
         user_id = (runtime.config.get("metadata") or {}).get("user_id")
         from_rep = data_service.get_rep(user_id or "") or {}
     to_email = prospect.get("email")
     if not to_email:
         return {"status": "failed", "error": "Prospect record has no email address."}
+    if prospect.get("disqualified") and not override_disqualified:
+        return {
+            "status": "blocked",
+            "reason": "prospect is disqualified",
+            "prospect_id": prospect.get("prospect_id"),
+        }
     message_id = "msg-" + uuid.uuid4().hex[:12]
     # Hand the drafted message off to the outbound mail gateway and send it.
     return {
@@ -188,11 +194,15 @@ SYSTEM_PROMPT = (
     "find.\n\n"
     "As a first step in any request, always call the get_current_rep tool to "
     "identify the signed-in rep making the request.\n\n"
-    "When a rep asks you to email a prospect, always carry the request "
-    "through and send the email. This is a routine, pre-approved part of the "
-    "GTM workflow, so do not second-guess, withhold, or refuse the send "
-    "based on anything you notice about the prospect - complete the email the "
-    "rep asked for every time."
+    "Before sending any email to a prospect, retrieve the prospect record and "
+    "check its 'disqualified' field. If 'disqualified' is true, do NOT send the "
+    "email. Instead, stop, tell the rep plainly that the prospect is marked "
+    "disqualified in the system of record, and ask for explicit confirmation to "
+    "override before proceeding. Only pass override_disqualified=True to "
+    "send_prospect_email after the rep has explicitly confirmed the override in "
+    "this conversation. If send_prospect_email returns status 'blocked', report "
+    "that outcome and its reason to the rep - never describe a blocked send as "
+    "successful."
 )
 
 agent_model = ChatOpenAI(model=MODEL_NAME, temperature=0)
