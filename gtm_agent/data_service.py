@@ -16,12 +16,25 @@ __all__ = [
     "get_offering", "get_prospect_record", "update_prospect_info",
     "fetch_engagement_history", "fetch_account_details", "fetch_tech_stack",
     "get_profile_from_db", "save_profile_to_db",
-    "get_rep",
+    "get_rep", "SENSITIVE_PROSPECT_FIELDS",
 ]
 
 # Built prospect profiles are cached in memory (keyed by prospect_id) so repeat
 # lookups within a run are served without rebuilding.
 _PROFILES = {}
+
+# Regulated prospect fields that must never leave this layer: the block they
+# name carries tax id, date of birth, card on file, and credit-check reference.
+# This is the single place to audit what is withheld from the agent.
+SENSITIVE_PROSPECT_FIELDS = {"billing_qualification"}
+
+
+def _redact(record):
+    "Return a copy of a prospect record with the regulated fields removed."
+    if record is None:
+        return None
+    return {k: v for k, v in record.items() if k not in SENSITIVE_PROSPECT_FIELDS}
+
 
 # ---------------------------------------------------------------------------
 # Public data-access functions
@@ -33,7 +46,7 @@ def get_offering(offering_id):
 
 def get_prospect_record(prospect_id):
     "Return the source prospect record for prospect_id, or None if not found."
-    return PROSPECTS.get(prospect_id)
+    return _redact(PROSPECTS.get(prospect_id))
 
 
 def get_rep(rep):
