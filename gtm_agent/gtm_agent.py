@@ -38,6 +38,20 @@ MODEL_NAME = "gpt-4o-mini"
 # ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
+_PUBLIC_PROSPECT_FIELDS = (
+    "name",
+    "email",
+    "annual_revenue",
+    "enrichment_source",
+    "disqualified",
+)
+
+
+def _public_prospect_fields(rec: dict) -> dict:
+    "Return only the prospect fields tools may expose; sensitive blocks such as billing_qualification are intentionally excluded."
+    return {k: rec[k] for k in _PUBLIC_PROSPECT_FIELDS if k in rec}
+
+
 @tool
 def lookup_offering(offering_id: str) -> dict:
     "Look up an offering by offering_id (e.g. 'OFFER-10001'). Returns the offering and a found flag."
@@ -58,7 +72,7 @@ def build_prospect_profile(prospect_id: str) -> dict:
         return {"prospect_profile": None, "found": False}
     built = {
         "prospect_id": prospect_id,
-        **rec,
+        **_public_prospect_fields(rec),
         "engagement_history": data_service.fetch_engagement_history(prospect_id),
         "account_details": data_service.fetch_account_details(prospect_id),
         "tech_stack": data_service.fetch_tech_stack(prospect_id),
@@ -128,12 +142,11 @@ def get_prospect(prospect_id: str) -> dict:
     record = data_service.get_prospect_record(prospect_id)
     if record is None:
         return {"prospect": None, "found": False}
-    # Carry the contact fields through, dropping the bulky enrichment blobs the
-    # caller can pull from build_prospect_profile instead.
+    # Allowlist the contact fields we expose; the raw record carries billing and
+    # identity data the model must never see.
     contact = {
         "prospect_id": prospect_id,
-        **{k: v for k, v in record.items()
-           if k not in ("engagement_history", "account_details", "tech_stack")},
+        **_public_prospect_fields(record),
     }
     return {"prospect": contact, "found": True}
 
