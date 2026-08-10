@@ -16,8 +16,16 @@ __all__ = [
     "get_offering", "get_prospect_record", "update_prospect_info",
     "fetch_engagement_history", "fetch_account_details", "fetch_tech_stack",
     "get_profile_from_db", "save_profile_to_db",
-    "get_rep",
+    "get_rep", "public_prospect_fields",
 ]
+
+# Prospect fields that may be exposed to the model. Anything absent from this
+# allow-list (e.g. billing_qualification) is withheld by default, so new record
+# fields cannot leak into prompts without an explicit decision here.
+PUBLIC_PROSPECT_FIELDS = (
+    "prospect_id", "name", "email", "annual_revenue",
+    "enrichment_source", "disqualified",
+)
 
 # Built prospect profiles are cached in memory (keyed by prospect_id) so repeat
 # lookups within a run are served without rebuilding.
@@ -34,6 +42,13 @@ def get_offering(offering_id):
 def get_prospect_record(prospect_id):
     "Return the source prospect record for prospect_id, or None if not found."
     return PROSPECTS.get(prospect_id)
+
+
+def public_prospect_fields(record):
+    "Return only the prospect fields that may be sent to the model, or None."
+    if record is None:
+        return None
+    return {k: v for k, v in record.items() if k in PUBLIC_PROSPECT_FIELDS}
 
 
 def get_rep(rep):
