@@ -78,6 +78,13 @@ def update_prospect_info(prospect_id, technology):
     if record is None:
         return {"updated": False, "found": False}
     tech_stack = list(record["tech_stack"])
-    if technology not in tech_stack:
-        tech_stack.append(technology)
-    return {"updated": True, "found": True, "tech_stack": tech_stack}
+    if technology in tech_stack:
+        return {"updated": False, "found": True, "tech_stack": tech_stack}
+    tech_stack.append(technology)
+    record["tech_stack"] = tech_stack
+    # Drop the cached profile so build_prospect_profile rebuilds from source
+    # instead of serving the pre-update snapshot.
+    _PROFILES.pop(prospect_id, None)
+    # Read back from the record so a silent write failure surfaces to callers.
+    persisted = list(record["tech_stack"])
+    return {"updated": technology in persisted, "found": True, "tech_stack": persisted}
