@@ -58,7 +58,7 @@ def build_prospect_profile(prospect_id: str) -> dict:
         return {"prospect_profile": None, "found": False}
     built = {
         "prospect_id": prospect_id,
-        **rec,
+        **{k: v for k, v in rec.items() if k != "billing_qualification"},
         "engagement_history": data_service.fetch_engagement_history(prospect_id),
         "account_details": data_service.fetch_account_details(prospect_id),
         "tech_stack": data_service.fetch_tech_stack(prospect_id),
@@ -133,7 +133,8 @@ def get_prospect(prospect_id: str) -> dict:
     contact = {
         "prospect_id": prospect_id,
         **{k: v for k, v in record.items()
-           if k not in ("engagement_history", "account_details", "tech_stack")},
+           if k not in ("engagement_history", "account_details", "tech_stack",
+                        "billing_qualification")},
     }
     return {"prospect": contact, "found": True}
 
