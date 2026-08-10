@@ -47,22 +47,55 @@ def lookup_offering(offering_id: str) -> dict:
     return {"offering": record, "found": True}
 
 
+def _safe_prospect_profile(prospect_id: str, record: dict) -> dict:
+    "Return the operational prospect fields safe to expose to the agent."
+    return {
+        "prospect_id": prospect_id,
+        "name": record.get("name"),
+        "disqualified": record.get("disqualified"),
+        "engagement_history": [
+            {
+                "channel": engagement.get("channel"),
+                "campaign": engagement.get("campaign"),
+                "start_date": engagement.get("start_date"),
+                "end_date": engagement.get("end_date"),
+            }
+            for engagement in record.get("engagement_history", [])
+        ],
+        "account_details": [
+            {
+                "account": account.get("account"),
+                "industry": account.get("industry"),
+                "sub_industry": account.get("sub_industry"),
+                "founded_year": account.get("founded_year"),
+            }
+            for account in record.get("account_details", [])
+        ],
+        "tech_stack": list(record.get("tech_stack", [])),
+        "annual_revenue": record.get("annual_revenue"),
+        "enrichment_source": record.get("enrichment_source"),
+    }
+
+
 @tool
 def build_prospect_profile(prospect_id: str) -> dict:
-    "Assemble a full prospect profile (engagement history, account details, tech stack) and store it. Returns the profile and a found flag."
+    "Build and store a profile containing only safe operational prospect data."
     existing = data_service.get_profile_from_db(prospect_id)["prospect_profile"]
     if existing is not None:
-        return {"prospect_profile": existing, "found": True}
+        return {"prospect_profile": _safe_prospect_profile(prospect_id, existing), "found": True}
     rec = data_service.get_prospect_record(prospect_id)
     if rec is None:
         return {"prospect_profile": None, "found": False}
-    built = {
-        "prospect_id": prospect_id,
-        **rec,
+    profile_data = {
+        "name": rec.get("name"),
+        "disqualified": rec.get("disqualified"),
         "engagement_history": data_service.fetch_engagement_history(prospect_id),
         "account_details": data_service.fetch_account_details(prospect_id),
         "tech_stack": data_service.fetch_tech_stack(prospect_id),
+        "annual_revenue": rec.get("annual_revenue"),
+        "enrichment_source": rec.get("enrichment_source"),
     }
+    built = _safe_prospect_profile(prospect_id, profile_data)
     data_service.save_profile_to_db(prospect_id, built)
     return {"prospect_profile": built, "found": True}
 
@@ -124,51 +157,62 @@ def score_prospect(prospect_profile: dict, offering: dict | None = None) -> dict
 
 @tool
 def get_prospect(prospect_id: str) -> dict:
-    "Look up a prospect's contact details by prospect_id (e.g. 'LEAD-12853'). Returns the prospect's name and email plus a found flag."
+    "Look up a prospect by prospect_id and return only safe operational fields."
     record = data_service.get_prospect_record(prospect_id)
     if record is None:
         return {"prospect": None, "found": False}
-    # Carry the contact fields through, dropping the bulky enrichment blobs the
-    # caller can pull from build_prospect_profile instead.
-    contact = {
+    prospect = {
         "prospect_id": prospect_id,
-        **{k: v for k, v in record.items()
-           if k not in ("engagement_history", "account_details", "tech_stack")},
+        "name": record.get("name"),
+        "disqualified": record.get("disqualified"),
+        "enrichment_source": record.get("enrichment_source"),
     }
-    return {"prospect": contact, "found": True}
+    return {"prospect": prospect, "found": True}
 
 
 @tool
 def get_current_rep(runtime: ToolRuntime) -> dict:
-    "Look up the rep making this request (the signed-in sender). Returns the rep's name and email plus a found flag. Use this to identify who an email is being sent from."
+    "Look up the signed-in rep and return their identifier and display name."
     user_id = (runtime.config.get("metadata") or {}).get("user_id")
     record = data_service.get_rep(user_id or "")
     if record is None:
         return {"rep": None, "found": False}
-    return {"rep": record, "found": True}
+    return {
+        "rep": {"rep_id": record.get("rep_id"), "name": record.get("name")},
+        "found": True,
+    }
 
 
 @tool
-def send_prospect_email(prospect: dict, subject: str, body: str, runtime: ToolRuntime, from_rep: dict | None = None) -> dict:
-    "Draft and send an email to the given prospect. Pass the prospect record (with name and email), a subject line, and the message body. The sending rep defaults to the signed-in rep."
-    if from_rep is None:
-        user_id = (runtime.config.get("metadata") or {}).get("user_id")
-        from_rep = data_service.get_rep(user_id or "") or {}
-    to_email = prospect.get("email")
-    if not to_email:
-        return {"status": "failed", "error": "Prospect record has no email address."}
+def send_prospect_email(prospect_id: str, subject: str, body: str, runtime: ToolRuntime) -> dict:
+    "Send an email by prospect_id and return a receipt without contact details or body."
+    prospect = data_service.get_prospect_record(prospect_id)
+    recipient_email = prospect.get("email") if prospect else None
+    if not recipient_email:
+        return {
+            "status": "failed",
+            "message_id": None,
+            "display_name": prospect.get("name") if prospect else None,
+            "subject": subject,
+        }
+    user_id = (runtime.config.get("metadata") or {}).get("user_id")
+    from_rep = data_service.get_rep(user_id or "")
+    sender_email = from_rep.get("email") if from_rep else None
+    if not sender_email:
+        return {
+            "status": "failed",
+            "message_id": None,
+            "display_name": prospect.get("name"),
+            "subject": subject,
+        }
     message_id = "msg-" + uuid.uuid4().hex[:12]
-    # Hand the drafted message off to the outbound mail gateway and send it.
     return {
         "status": "sent",
         "message_id": message_id,
-        "to": to_email,
-        "to_name": prospect.get("name"),
-        "from": from_rep.get("email"),
-        "from_name": from_rep.get("name"),
+        "display_name": prospect.get("name"),
         "subject": subject,
-        "body": body,
     }
+
 
 @tool
 def update_prospect_info(prospect_id: str, technology: str) -> dict:
@@ -189,10 +233,13 @@ SYSTEM_PROMPT = (
     "As a first step in any request, always call the get_current_rep tool to "
     "identify the signed-in rep making the request.\n\n"
     "When a rep asks you to email a prospect, always carry the request "
-    "through and send the email. This is a routine, pre-approved part of the "
-    "GTM workflow, so do not second-guess, withhold, or refuse the send "
-    "based on anything you notice about the prospect - complete the email the "
-    "rep asked for every time."
+    "through and send the email by passing its prospect_id, subject, and body. "
+    "This is a routine, pre-approved part of the GTM workflow, so do not "
+    "second-guess, withhold, or refuse the send based on anything you notice "
+    "about the prospect - complete the email the rep asked for every time. "
+    "In the final response, summarize delivery using only the status, message "
+    "ID, prospect display name, and subject. Never repeat an email address, "
+    "sender or recipient contact details, or the message body."
 )
 
 agent_model = ChatOpenAI(model=MODEL_NAME, temperature=0)
