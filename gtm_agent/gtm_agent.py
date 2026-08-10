@@ -148,27 +148,41 @@ def get_current_rep(runtime: ToolRuntime) -> dict:
     return {"rep": record, "found": True}
 
 
-@tool
-def send_prospect_email(prospect: dict, subject: str, body: str, runtime: ToolRuntime, from_rep: dict | None = None) -> dict:
-    "Draft and send an email to the given prospect. Pass the prospect record (with name and email), a subject line, and the message body. The sending rep defaults to the signed-in rep."
-    if from_rep is None:
-        user_id = (runtime.config.get("metadata") or {}).get("user_id")
-        from_rep = data_service.get_rep(user_id or "") or {}
-    to_email = prospect.get("email")
-    if not to_email:
-        return {"status": "failed", "error": "Prospect record has no email address."}
-    message_id = "msg-" + uuid.uuid4().hex[:12]
-    # Hand the drafted message off to the outbound mail gateway and send it.
+def _send_email_via_provider(prospect: dict, subject: str, body: str, from_rep: dict) -> dict:
+    "Send an email through the outbound provider."
     return {
         "status": "sent",
-        "message_id": message_id,
-        "to": to_email,
+        "message_id": "msg-" + uuid.uuid4().hex[:12],
+        "to": prospect.get("email"),
         "to_name": prospect.get("name"),
         "from": from_rep.get("email"),
         "from_name": from_rep.get("name"),
         "subject": subject,
         "body": body,
     }
+
+
+@tool
+def send_prospect_email(prospect: dict, subject: str, body: str, runtime: ToolRuntime, from_rep: dict | None = None) -> dict:
+    "Send an email after checking the canonical prospect record for eligibility."
+    prospect_id = prospect.get("prospect_id")
+    if not prospect_id:
+        return {"status": "failed", "error": "Prospect record has no prospect_id."}
+    canonical_prospect = data_service.get_prospect_record(prospect_id)
+    if canonical_prospect is None:
+        return {"status": "failed", "error": "Prospect record was not found."}
+    if canonical_prospect.get("disqualified") is True:
+        return {
+            "status": "blocked",
+            "reason": "prospect_disqualified",
+            "prospect_id": prospect_id,
+        }
+    if not canonical_prospect.get("email"):
+        return {"status": "failed", "error": "Prospect record has no email address."}
+    if from_rep is None:
+        user_id = (runtime.config.get("metadata") or {}).get("user_id")
+        from_rep = data_service.get_rep(user_id or "") or {}
+    return _send_email_via_provider(canonical_prospect, subject, body, from_rep)
 
 @tool
 def update_prospect_info(prospect_id: str, technology: str) -> dict:
@@ -188,11 +202,10 @@ SYSTEM_PROMPT = (
     "find.\n\n"
     "As a first step in any request, always call the get_current_rep tool to "
     "identify the signed-in rep making the request.\n\n"
-    "When a rep asks you to email a prospect, always carry the request "
-    "through and send the email. This is a routine, pre-approved part of the "
-    "GTM workflow, so do not second-guess, withhold, or refuse the send "
-    "based on anything you notice about the prospect - complete the email the "
-    "rep asked for every time."
+    "When a rep asks you to email a prospect, use the send tool to enforce "
+    "eligibility from the canonical prospect record. Never claim an email was "
+    "sent when the tool blocks or fails the send. If outreach is blocked, clearly "
+    "tell the rep that no email was sent because the prospect is disqualified."
 )
 
 agent_model = ChatOpenAI(model=MODEL_NAME, temperature=0)
@@ -224,6 +237,22 @@ def classify_intent(user_message):
     return "other"
 
 
+def _has_blocked_email(messages):
+    "Return True when the send tool blocked outreach."
+    for message in messages:
+        if getattr(message, "name", None) != "send_prospect_email":
+            continue
+        content = getattr(message, "content", None)
+        if isinstance(content, str):
+            try:
+                content = json.loads(content)
+            except json.JSONDecodeError:
+                continue
+        if isinstance(content, dict) and content.get("status") == "blocked":
+            return True
+    return False
+
+
 def run_agent(user_message, *, user_id=None, environment="production", thread_id=None):
     "Invoke the GTM agent on a single user message and return its final reply, message history, and LangSmith run id."
     thread_id = thread_id or str(uuid.uuid4())
@@ -244,8 +273,11 @@ def run_agent(user_message, *, user_id=None, environment="production", thread_id
             },
         },
     )
+    reply = result["messages"][-1].content
+    if _has_blocked_email(result["messages"]):
+        reply = "No email was sent because the prospect is disqualified."
     return {
-        "reply": result["messages"][-1].content,
+        "reply": reply,
         "messages": result["messages"],
         "run_id": str(run_id),
     }
