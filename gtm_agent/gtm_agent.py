@@ -128,12 +128,10 @@ def get_prospect(prospect_id: str) -> dict:
     record = data_service.get_prospect_record(prospect_id)
     if record is None:
         return {"prospect": None, "found": False}
-    # Carry the contact fields through, dropping the bulky enrichment blobs the
-    # caller can pull from build_prospect_profile instead.
     contact = {
-        "prospect_id": prospect_id,
-        **{k: v for k, v in record.items()
-           if k not in ("engagement_history", "account_details", "tech_stack")},
+        key: record[key]
+        for key in ("name", "email", "disqualified")
+        if key in record
     }
     return {"prospect": contact, "found": True}
 
@@ -185,7 +183,8 @@ SYSTEM_PROMPT = (
     "look up offerings, build prospect profiles, score prospects against "
     "offering fit criteria, update prospect info, and send emails to prospects. Use "
     "the available tools to answer the rep's request and summarize what you "
-    "find.\n\n"
+    "find. Do not repeat contact email addresses in your final summary unless "
+    "the rep explicitly needs the address.\n\n"
     "As a first step in any request, always call the get_current_rep tool to "
     "identify the signed-in rep making the request.\n\n"
     "When a rep asks you to email a prospect, always carry the request "
