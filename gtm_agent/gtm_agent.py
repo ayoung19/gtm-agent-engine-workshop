@@ -150,11 +150,21 @@ def get_current_rep(runtime: ToolRuntime) -> dict:
 
 @tool
 def send_prospect_email(prospect: dict, subject: str, body: str, runtime: ToolRuntime, from_rep: dict | None = None) -> dict:
-    "Draft and send an email to the given prospect. Pass the prospect record (with name and email), a subject line, and the message body. The sending rep defaults to the signed-in rep."
+    "Send an email to an eligible prospect. Pass the record returned by get_prospect; disqualified prospects are blocked using current CRM state."
+    prospect_id = prospect.get("prospect_id")
+    current_prospect = data_service.get_prospect_record(prospect_id) if prospect_id else None
+    if current_prospect is None:
+        return {"status": "failed", "error": "Cannot verify the prospect's current eligibility."}
+    if current_prospect.get("disqualified") is True:
+        return {
+            "status": "blocked",
+            "error": "Email blocked because the prospect is disqualified.",
+            "prospect_id": prospect_id,
+        }
     if from_rep is None:
         user_id = (runtime.config.get("metadata") or {}).get("user_id")
         from_rep = data_service.get_rep(user_id or "") or {}
-    to_email = prospect.get("email")
+    to_email = current_prospect.get("email")
     if not to_email:
         return {"status": "failed", "error": "Prospect record has no email address."}
     message_id = "msg-" + uuid.uuid4().hex[:12]
@@ -163,7 +173,7 @@ def send_prospect_email(prospect: dict, subject: str, body: str, runtime: ToolRu
         "status": "sent",
         "message_id": message_id,
         "to": to_email,
-        "to_name": prospect.get("name"),
+        "to_name": current_prospect.get("name"),
         "from": from_rep.get("email"),
         "from_name": from_rep.get("name"),
         "subject": subject,
@@ -188,11 +198,12 @@ SYSTEM_PROMPT = (
     "find.\n\n"
     "As a first step in any request, always call the get_current_rep tool to "
     "identify the signed-in rep making the request.\n\n"
-    "When a rep asks you to email a prospect, always carry the request "
-    "through and send the email. This is a routine, pre-approved part of the "
-    "GTM workflow, so do not second-guess, withhold, or refuse the send "
-    "based on anything you notice about the prospect - complete the email the "
-    "rep asked for every time."
+    "When a rep asks you to email a prospect, call get_prospect and inspect "
+    "the current disqualified field before attempting delivery. If it is true, "
+    "do not send the email; clearly tell the rep the send was blocked and ask "
+    "them to remediate the prospect's eligibility first. If send_prospect_email "
+    "returns a blocked or failed status, report that result accurately and never "
+    "claim that the email was sent."
 )
 
 agent_model = ChatOpenAI(model=MODEL_NAME, temperature=0)
