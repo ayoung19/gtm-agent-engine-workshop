@@ -23,6 +23,9 @@ __all__ = [
 # lookups within a run are served without rebuilding.
 _PROFILES = {}
 
+# Sub-objects that must never leave the data layer (cardholder / national-ID data).
+SENSITIVE_RECORD_KEYS = ("billing_qualification",)
+
 # ---------------------------------------------------------------------------
 # Public data-access functions
 # ---------------------------------------------------------------------------
@@ -31,9 +34,17 @@ def get_offering(offering_id):
     return OFFERINGS.get(offering_id)
 
 
+def _scrub(record):
+    "Strip sensitive sub-objects from a record before it leaves the data layer."
+    if not isinstance(record, dict):
+        return record
+    return {k: v for k, v in record.items() if k not in SENSITIVE_RECORD_KEYS}
+
+
 def get_prospect_record(prospect_id):
     "Return the source prospect record for prospect_id, or None if not found."
-    return PROSPECTS.get(prospect_id)
+    record = PROSPECTS.get(prospect_id)
+    return None if record is None else _scrub(record)
 
 
 def get_rep(rep):
