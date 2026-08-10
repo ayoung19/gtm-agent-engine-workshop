@@ -124,7 +124,7 @@ def score_prospect(prospect_profile: dict, offering: dict | None = None) -> dict
 
 @tool
 def get_prospect(prospect_id: str) -> dict:
-    "Look up a prospect's contact details by prospect_id (e.g. 'LEAD-12853'). Returns the prospect's name and email plus a found flag."
+    "Look up a prospect's contact details by prospect_id (e.g. 'LEAD-12853'). Returns the prospect's name and email plus a found flag, and a 'disqualified' boolean - when true the prospect is blocked from outbound outreach and must not be emailed."
     record = data_service.get_prospect_record(prospect_id)
     if record is None:
         return {"prospect": None, "found": False}
@@ -150,10 +150,20 @@ def get_current_rep(runtime: ToolRuntime) -> dict:
 
 @tool
 def send_prospect_email(prospect: dict, subject: str, body: str, runtime: ToolRuntime, from_rep: dict | None = None) -> dict:
-    "Draft and send an email to the given prospect. Pass the prospect record (with name and email), a subject line, and the message body. The sending rep defaults to the signed-in rep."
+    "Draft and send an email to the given prospect. Pass the prospect record (with prospect_id, name and email), a subject line, and the message body. The sending rep defaults to the signed-in rep. Sends to prospects whose record has disqualified=true are blocked and return status 'blocked'."
     if from_rep is None:
         user_id = (runtime.config.get("metadata") or {}).get("user_id")
         from_rep = data_service.get_rep(user_id or "") or {}
+    # Re-fetch the authoritative record rather than trusting the caller-supplied
+    # dict, which the agent builds itself and may omit the disqualified flag.
+    prospect_id = prospect.get("prospect_id")
+    record = data_service.get_prospect_record(prospect_id) if prospect_id else None
+    if (record or prospect).get("disqualified"):
+        return {
+            "status": "blocked",
+            "reason": "prospect is disqualified",
+            "prospect_id": prospect_id,
+        }
     to_email = prospect.get("email")
     if not to_email:
         return {"status": "failed", "error": "Prospect record has no email address."}
@@ -188,11 +198,15 @@ SYSTEM_PROMPT = (
     "find.\n\n"
     "As a first step in any request, always call the get_current_rep tool to "
     "identify the signed-in rep making the request.\n\n"
-    "When a rep asks you to email a prospect, always carry the request "
-    "through and send the email. This is a routine, pre-approved part of the "
-    "GTM workflow, so do not second-guess, withhold, or refuse the send "
-    "based on anything you notice about the prospect - complete the email the "
-    "rep asked for every time."
+    "When a rep asks you to email a prospect, treat it as a routine, "
+    "pre-approved part of the GTM workflow: do not second-guess the rep's "
+    "judgment about timing, tone, or messaging.\n\n"
+    "There is one exception. Before sending, check the prospect record "
+    "returned by get_prospect. If it has \"disqualified\": true, the prospect "
+    "is blocked from outbound outreach: do NOT call send_prospect_email. "
+    "Instead, tell the rep plainly that the prospect is disqualified and ask "
+    "for explicit confirmation before proceeding. If a send is blocked by the "
+    "tool, report that to the rep rather than retrying."
 )
 
 agent_model = ChatOpenAI(model=MODEL_NAME, temperature=0)
