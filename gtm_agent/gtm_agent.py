@@ -73,8 +73,12 @@ SCORING_PROMPT = (
     "tech stack. In your justification, explicitly list which of the offering's required "
     "technologies the prospect has and which required technologies they are missing, naming "
     "each one. Any missing required technology must lower the tech_stack_match component and "
-    "the overall score. Return a score and a justification that reflects your "
-    "overall assessment of this prospect's potential."
+    "the overall score. Define segment_fit as the match between the prospect's own segment "
+    "attribute and the offering's target_segment. If the prospect profile has no segment "
+    "field, return segment_fit: null and include the exact statement 'segment fit not "
+    "assessed - no segment data on the prospect record' in the justification. Compute the "
+    "overall score only from the rubric components you actually assessed. Return a score "
+    "and a justification that reflects your overall assessment of this prospect's potential."
 )
 
 from typing import Literal
@@ -82,7 +86,7 @@ from typing import Literal
 class RubricBreakdown(BaseModel):
     revenue_fit: float
     tech_stack_match: float
-    segment_fit: float
+    segment_fit: float | None = None
     component_max: Literal[100] = 100
 
 
@@ -119,6 +123,11 @@ def score_prospect(prospect_profile: dict, offering: dict | None = None) -> dict
         {"role": "system", "content": SCORING_PROMPT},
         {"role": "user", "content": user},
     ])
+    if not any(
+        "segment" in str(key).lower() and value not in (None, "")
+        for key, value in prospect_profile.items()
+    ):
+        result.rubric_breakdown.segment_fit = None
     return result.model_dump()
 
 
